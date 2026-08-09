@@ -1,0 +1,11 @@
+{
+  // Cloudflare Workers static-assets deploy for the SPA.
+  // `npm run build` outputs to ./dist, which is served directly; the SPA
+  // fallback rewrites unknown paths to index.html for client-side routing.
+  "name": "dawsonproductionstudio",
+  "compatibility_date": "2025-08-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}
