@@ -3,10 +3,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { UploadCloud, Music2, Settings2, Clapperboard, Loader2 } from "lucide-react";
 import { Button, Card, Input, Spinner, Tabs } from "./ui";
-import { listVideos, createVideo, generateCaptions, getVideoAssets } from "../api";
-import type { FarmVideoWithRelations, FarmVideoStatus } from "../types";
-import { probeVideoFile, uploadToBucket } from "../client-helpers";
-import { splitIntoSegments } from "../render";
+import { listVideos, createVideo, updateVideo, generateCaptions, getVideoAssets, listMusic } from "../api";
+import type { FarmVideoWithRelations, FarmVideoStatus, FarmMusic } from "../types";
+import { probeVideoFile, uploadToBucket, shortHook } from "../client-helpers";
+import { splitIntoSegments, renderShort } from "../render";
+import { renderMusicBed, type MusicPresetKey } from "../music";
 import { VideoDialog } from "./video-dialog";
 import { MusicTab } from "./music-tab";
 import { SettingsTab } from "./settings-tab";
@@ -118,9 +119,12 @@ function UploadDropzone({ onUploaded }: { onUploaded: () => void }) {
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
 
-  // Ingest one <=60s clip: upload + thumbnail + DB row + captions.
+  // Ingest one <=60s clip end-to-end: upload → captions → auto-render
+  // (music bed + burned-in caption) → mark ready. The finished, captioned video
+  // is produced automatically, no manual render step.
   const ingestClip = useCallback(
-    async (clip: File, clipTitle: string) => {
+    async (clip: File, clipTitle: string, idx: number, beds: FarmMusic[], label: string) => {
+      setBusy(`${label}uploading…`);
       const probe = await probeVideoFile(clip);
       const sourcePath = await uploadToBucket("farm-uploads", clip, {
         contentType: clip.type || "video/mp4",
@@ -142,8 +146,39 @@ function UploadDropzone({ onUploaded }: { onUploaded: () => void }) {
         height: probe.height || null,
         thumbnail_path: thumbnailPath,
       });
-      try { await generateCaptions(id); }
-      catch (e) { console.error("caption gen failed", e); }
+
+      setBusy(`${label}writing captions…`);
+      let igCaption = "";
+      try {
+        const res = (await generateCaptions(id)) as { captions?: Array<{ platform: string; caption: string }> };
+        const caps = res?.captions ?? [];
+        igCaption = caps.find((c) => c.platform === "instagram")?.caption || caps[0]?.caption || "";
+      } catch (e) {
+        console.error("caption gen failed", e);
+      }
+      const captionText = shortHook(igCaption) || clipTitle;
+
+      // Auto-render: music bed + burned-in caption, straight from the local file.
+      setBusy(`${label}adding music + captions…`);
+      const bed = beds.length ? beds[idx % beds.length] : null;
+      try {
+        const secs = Math.max(15, Math.min(90, Math.ceil((probe.duration ?? 30) + 2)));
+        const musicBytes = await renderMusicBed((bed?.preset_key ?? "sunrise") as MusicPresetKey, secs);
+        const out = await renderShort(clip, {
+          music: musicBytes,
+          musicExt: "wav",
+          audioMode: "mix",
+          captionText,
+          onProgress: (r) => setBusy(`${label}rendering ${Math.round(r * 100)}%…`),
+        });
+        const renderPath = await uploadToBucket("farm-renders", out, {
+          ext: "mp4", contentType: "video/mp4", path: `${id}.mp4`,
+        });
+        await updateVideo(id, { render_path: renderPath, status: "ready", music_id: bed?.id ?? null });
+      } catch (e) {
+        console.error("auto-render failed", e);
+        // Leave as 'captioned' so the user can render manually from the editor.
+      }
       return id;
     },
     [description],
@@ -156,28 +191,27 @@ function UploadDropzone({ onUploaded }: { onUploaded: () => void }) {
     try {
       setBusy("Reading clip…");
       const probe = await probeVideoFile(file);
+      const beds = (await listMusic()).filter((m) => m.kind === "procedural");
 
       if (probe.duration && probe.duration > 60) {
-        // Long clip → split into <=1-minute parts; only sub-minute clips post.
+        // Long clip → split into <=1-minute parts; each rendered + captioned.
         setBusy("Splitting into 1-minute clips…");
         const segments = await splitIntoSegments(file, 60);
         let made = 0;
         for (let i = 0; i < segments.length; i++) {
-          setBusy(`Processing part ${i + 1} of ${segments.length}…`);
           const segFile = new File([segments[i]], `${base}-part${i + 1}.mp4`, { type: "video/mp4" });
           const sp = await probeVideoFile(segFile);
           if (sp.duration && sp.duration < 3) continue; // drop tiny tail
-          await ingestClip(segFile, `${base} (Part ${i + 1})`);
+          await ingestClip(segFile, `${base} (Part ${i + 1})`, made, beds, `Part ${i + 1}/${segments.length}: `);
           made++;
           onUploaded();
         }
         setTitle(""); setDescription("");
-        toast.success(`Split into ${made} clip${made === 1 ? "" : "s"} under a minute — captions added.`);
+        toast.success(`Split into ${made} finished clip${made === 1 ? "" : "s"} — music + captions burned in.`);
       } else {
-        setBusy("Uploading…");
-        await ingestClip(file, base);
+        await ingestClip(file, base, 0, beds, "");
         setTitle(""); setDescription("");
-        toast.success("Short added — open it to review captions, music, and scheduling.");
+        toast.success("Short is ready — music + captions burned in.");
       }
       onUploaded();
     } catch (e) {

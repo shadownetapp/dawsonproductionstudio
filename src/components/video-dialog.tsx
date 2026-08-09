@@ -15,17 +15,7 @@ import {
 } from "../types";
 import { renderShort } from "../render";
 import { renderMusicBed, type MusicPresetKey } from "../music";
-import { fetchBytes, uploadToBucket, extFromUrl } from "../client-helpers";
-
-// Turn a full caption into a short on-screen hook: first line, no hashtags,
-// first sentence or ~90 chars, so the burned-in text stays a clean one-liner.
-function shortHook(caption: string): string {
-  let s = (caption.split("\n")[0] || "").replace(/#[^\s#]+/g, "").replace(/\s{2,}/g, " ").trim();
-  const m = s.match(/^(.{0,90}?[.!?])(\s|$)/);
-  if (m) return m[1].trim();
-  if (s.length > 90) s = s.slice(0, 88).replace(/\s+\S*$/, "").trim() + "…";
-  return s;
-}
+import { fetchBytes, uploadToBucket, extFromUrl, shortHook } from "../client-helpers";
 
 export function VideoDialog({
   video, open, onClose,
