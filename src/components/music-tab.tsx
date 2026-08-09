@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Play, Pause, Upload, Trash2, Music2 } from "lucide-react";
-import { Button, Card, Input, Badge, Spinner } from "./ui";
+import { Button, Card, Badge, Spinner } from "./ui";
 import { listMusic, registerTrack, deleteTrack } from "../api";
 import type { FarmMusic } from "../types";
 import { renderMusicBed, type MusicPresetKey } from "../music";
@@ -64,37 +64,101 @@ export function MusicTab() {
   );
 }
 
-function UploadTrack({ onDone }: { onDone: () => void }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState(false);
-  const [title, setTitle] = useState("");
+const AUDIO_EXT = /\.(mp3|m4a|wav|aac|ogg|oga|flac)$/i;
+const MAX_BYTES = 30 * 1024 * 1024;
 
-  const handle = async (file: File) => {
-    if (!file.type.startsWith("audio/")) return toast.error("Please choose an audio file (MP3, M4A, WAV)");
-    if (file.size > 30 * 1024 * 1024) return toast.error("Track is over 30 MB");
-    setBusy(true);
-    try {
-      const path = await uploadToBucket("farm-music", file, { contentType: file.type });
-      await registerTrack(title.trim() || file.name.replace(/\.[^.]+$/, ""), path);
-      setTitle("");
-      toast.success("Track added to the library");
-      onDone();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Upload failed");
-    } finally {
-      setBusy(false);
+function UploadTrack({ onDone }: { onDone: () => void }) {
+  const filesRef = useRef<HTMLInputElement>(null);
+  const folderRef = useRef<HTMLInputElement>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number; name: string } | null>(null);
+
+  const handleFiles = async (fileList: FileList | null) => {
+    if (!fileList) return;
+    const all = Array.from(fileList);
+    const audio = all.filter((f) => f.type.startsWith("audio/") || AUDIO_EXT.test(f.name));
+    const tooBig = audio.filter((f) => f.size > MAX_BYTES);
+    const queue = audio.filter((f) => f.size <= MAX_BYTES);
+
+    if (queue.length === 0) {
+      toast.error(all.length ? "No audio files found (MP3, M4A, WAV, OGG, FLAC)" : "Nothing selected");
+      return;
     }
+
+    let added = 0;
+    let failed = 0;
+    setProgress({ done: 0, total: queue.length, name: "" });
+    for (let i = 0; i < queue.length; i++) {
+      const file = queue[i];
+      setProgress({ done: i, total: queue.length, name: file.name });
+      try {
+        const path = await uploadToBucket("farm-music", file, {
+          contentType: file.type || "audio/mpeg",
+        });
+        // Tidy a title from the filename: strip ext, turn separators into spaces.
+        const title = file.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim();
+        await registerTrack(title || file.name, path);
+        added++;
+      } catch (e) {
+        console.error("track upload failed", file.name, e);
+        failed++;
+      }
+      if (added % 5 === 0) onDone(); // refresh the list periodically
+    }
+    setProgress(null);
+    onDone();
+    const bits = [`Added ${added} track${added === 1 ? "" : "s"}`];
+    if (failed) bits.push(`${failed} failed`);
+    if (tooBig.length) bits.push(`${tooBig.length} skipped (over 30 MB)`);
+    toast.success(bits.join(" · "));
   };
+
+  const busy = !!progress;
 
   return (
     <Card className="space-y-3 p-4">
-      <label className="text-xs font-medium text-green-900/70">Add your own track</label>
-      <div className="flex gap-2">
-        <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Track name (optional)" disabled={busy} />
-        <Button onClick={() => inputRef.current?.click()} loading={busy}><Upload className="size-4" /> Upload</Button>
+      <label className="text-xs font-medium text-green-900/70">Add music to your library</label>
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={() => filesRef.current?.click()} loading={busy}>
+          <Upload className="size-4" /> Upload files
+        </Button>
+        <Button variant="outline" onClick={() => folderRef.current?.click()} disabled={busy}>
+          <Upload className="size-4" /> Upload a whole folder
+        </Button>
       </div>
-      <p className="text-[11px] text-green-900/50">Only upload music you have the rights to use. MP3 / M4A / WAV · up to 30 MB.</p>
-      <input ref={inputRef} type="file" accept="audio/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handle(f); e.target.value = ""; }} />
+      {progress && (
+        <div className="space-y-1">
+          <div className="h-2 w-full overflow-hidden rounded-full bg-green-900/10">
+            <div
+              className="h-full bg-green-600 transition-all"
+              style={{ width: `${Math.round((progress.done / progress.total) * 100)}%` }}
+            />
+          </div>
+          <p className="truncate text-[11px] text-green-900/60">
+            Uploading {progress.done + 1} of {progress.total}: {progress.name}
+          </p>
+        </div>
+      )}
+      <p className="text-[11px] text-green-900/50">
+        Only add music you have the rights to use (public-domain / CC0 or licensed). Pick many files
+        at once, or a whole folder. MP3 / M4A / WAV / OGG / FLAC · up to 30 MB each.
+      </p>
+      <input
+        ref={filesRef}
+        type="file"
+        accept="audio/*"
+        multiple
+        className="hidden"
+        onChange={(e) => { void handleFiles(e.target.files); e.target.value = ""; }}
+      />
+      <input
+        ref={folderRef}
+        type="file"
+        multiple
+        className="hidden"
+        // @ts-expect-error non-standard but widely supported directory picker
+        webkitdirectory=""
+        onChange={(e) => { void handleFiles(e.target.files); e.target.value = ""; }}
+      />
     </Card>
   );
 }
