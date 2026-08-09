@@ -22,11 +22,14 @@ async function buildCaptionOverlay(opts: {
   videoHeight: number;
 }): Promise<{ png: Uint8Array; height: number }> {
   const { text, videoWidth, videoHeight } = opts;
-  const fontSize = Math.max(22, Math.round(videoHeight * 0.045));
-  const lineH = Math.round(fontSize * 1.25);
-  const padX = Math.round(fontSize * 0.8);
-  const padY = Math.round(fontSize * 0.6);
-  const maxTextW = videoWidth - padX * 2;
+  // Compact caption strip sized to the text (not the full frame) so it reads as
+  // a subtitle chip near the bottom and leaves the video mostly unobscured.
+  const fontSize = Math.max(20, Math.round(videoHeight * 0.040));
+  const lineH = Math.round(fontSize * 1.28);
+  const padX = Math.round(fontSize * 0.9);
+  const padY = Math.round(fontSize * 0.55);
+  const maxChipW = Math.round(videoWidth * 0.92);
+  const maxTextW = maxChipW - padX * 2;
 
   const measure = document.createElement("canvas").getContext("2d")!;
   const font = `700 ${fontSize}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
@@ -46,29 +49,46 @@ async function buildCaptionOverlay(opts: {
     }
   }
   if (cur) lines.push(cur);
-  // Cap at 4 lines so it never swallows the frame.
-  const shown = lines.slice(0, 4);
+  // Keep it to 3 lines max; if it overflows, trim and add an ellipsis.
+  let shown = lines.slice(0, 3);
+  if (lines.length > 3) {
+    let last = shown[2];
+    while (last && measure.measureText(last + "…").width > maxTextW) {
+      last = last.replace(/\s*\S+$/, "");
+    }
+    shown[2] = (last || shown[2]) + "…";
+  }
 
+  const textW = Math.max(...shown.map((l) => Math.ceil(measure.measureText(l).width)), 1);
+  const chipW = Math.min(maxChipW, textW + padX * 2);
   const h = shown.length * lineH + padY * 2;
+
   const canvas = document.createElement("canvas");
-  canvas.width = videoWidth;
+  canvas.width = chipW;
   canvas.height = h;
   const ctx = canvas.getContext("2d")!;
 
-  // Rounded translucent plate.
-  ctx.fillStyle = "rgba(0,0,0,0.5)";
-  ctx.fillRect(0, 0, videoWidth, h);
+  // Rounded translucent chip.
+  const radius = Math.min(Math.round(h * 0.32), Math.round(fontSize * 0.9));
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  if (typeof (ctx as CanvasRenderingContext2D & { roundRect?: unknown }).roundRect === "function") {
+    ctx.beginPath();
+    ctx.roundRect(0, 0, chipW, h, radius);
+    ctx.fill();
+  } else {
+    ctx.fillRect(0, 0, chipW, h);
+  }
 
   ctx.font = font;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.lineWidth = Math.max(3, Math.round(fontSize / 8));
-  ctx.strokeStyle = "rgba(0,0,0,0.85)";
+  ctx.lineWidth = Math.max(3, Math.round(fontSize / 7));
+  ctx.strokeStyle = "rgba(0,0,0,0.9)";
   ctx.fillStyle = "#ffffff";
   shown.forEach((line, i) => {
     const y = padY + i * lineH + lineH / 2;
-    ctx.strokeText(line, videoWidth / 2, y);
-    ctx.fillText(line, videoWidth / 2, y);
+    ctx.strokeText(line, chipW / 2, y);
+    ctx.fillText(line, chipW / 2, y);
   });
 
   const blob: Blob = await new Promise((resolve, reject) =>
@@ -122,9 +142,10 @@ export async function renderShort(file: File | Blob, opts: RenderOptions): Promi
   ff.on("log", logCollector);
   ff.on("progress", progressHandler);
 
-  // Place the caption plate in the lower third with a small margin.
-  const margin = Math.round(Math.min(w, h) * 0.04);
-  const overlayY = `H-${overlayH}-${Math.round(h * 0.14)}`;
+  // Anchor the caption chip near the very bottom (≈6% up), centered, so the
+  // main subject stays clear. `H`/`h` are ffmpeg's main/overlay heights.
+  void overlayH;
+  const overlayY = `H-h-${Math.round(h * 0.06)}`;
 
   // Loop the music so short beds cover long clips; -shortest trims to the video.
   // audioMode "mix" ducks the clip's own audio under the bed; "replace" drops it.
