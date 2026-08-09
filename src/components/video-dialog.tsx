@@ -149,6 +149,7 @@ export function VideoDialog({
   });
 
   const scheduledAt = video.posts.find((p) => p.status === "queued" || p.status === "ready")?.scheduled_at;
+  const tooLong = (video.duration_sec ?? 0) > 60;
   const previewUrl = assets.data?.renderUrl ?? assets.data?.sourceUrl ?? null;
 
   return (
@@ -236,6 +237,11 @@ export function VideoDialog({
               <div className="flex items-center justify-between gap-2 rounded-lg border border-green-900/10 p-2.5">
                 <span className="text-sm text-green-900">Slotted for <strong>{new Date(scheduledAt).toLocaleString()}</strong></span>
                 <Button variant="ghost" onClick={() => doUnschedule.mutate()} loading={doUnschedule.isPending}><CalendarX className="size-4" /> Unschedule</Button>
+              </div>
+            ) : tooLong ? (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-800">
+                This clip is <strong>{Math.round(video.duration_sec ?? 0)}s</strong> — over a minute, so it won't
+                post. Re-upload it and it'll auto-split into sub-minute parts you can schedule.
               </div>
             ) : (
               <Button variant="outline" onClick={() => doSchedule.mutate()} loading={doSchedule.isPending}><CalendarPlus className="size-4" /> Schedule into next open slot</Button>

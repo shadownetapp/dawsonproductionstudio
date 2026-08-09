@@ -231,3 +231,60 @@ export async function grabPoster(file: File | Blob): Promise<Blob> {
   }
   return new Blob([data.slice().buffer], { type: "image/jpeg" });
 }
+
+/**
+ * Split a clip into fixed-length segments (default 60s). Tries a fast stream
+ * copy first; falls back to re-encoding for containers/codecs copy can't
+ * segment. Returns the segments in order.
+ */
+export async function splitIntoSegments(
+  file: File | Blob,
+  seconds = 60,
+): Promise<Blob[]> {
+  const ff = await getFFmpeg();
+  const asFile = file instanceof File ? file : new File([file], "in.mp4", { type: "video/mp4" });
+  const probe = await probeVideo(asFile);
+  const dur = probe.durationSec ?? 0;
+  const inExt = inputExt(asFile.name);
+  const inName = `split_in.${inExt}`;
+  await ff.writeFile(inName, await fetchFile(asFile));
+
+  const copyArgs = [
+    "-i", inName, "-c", "copy", "-map", "0",
+    "-f", "segment", "-segment_time", String(seconds),
+    "-reset_timestamps", "1", "seg_%03d.mp4",
+  ];
+  const encodeArgs = [
+    "-i", inName,
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-b:a", "160k",
+    "-f", "segment", "-segment_time", String(seconds),
+    "-force_key_frames", `expr:gte(t,n_forced*${seconds})`,
+    "-reset_timestamps", "1", "seg_%03d.mp4",
+  ];
+
+  try {
+    await ff.exec(copyArgs);
+  } catch {
+    // Clean any partial output, then re-encode.
+    for (let i = 0; i < 256; i++) {
+      try { await ff.deleteFile(`seg_${String(i).padStart(3, "0")}.mp4`); } catch { break; }
+    }
+    await ff.exec(encodeArgs);
+  }
+
+  const out: Blob[] = [];
+  const expected = Math.max(1, Math.ceil((dur || seconds) / seconds)) + 2;
+  for (let i = 0; i < expected; i++) {
+    const name = `seg_${String(i).padStart(3, "0")}.mp4`;
+    try {
+      const d = (await ff.readFile(name)) as Uint8Array;
+      out.push(new Blob([d.slice().buffer], { type: "video/mp4" }));
+      await ff.deleteFile(name);
+    } catch {
+      break;
+    }
+  }
+  try { await ff.deleteFile(inName); } catch { /* ignore */ }
+  return out;
+}

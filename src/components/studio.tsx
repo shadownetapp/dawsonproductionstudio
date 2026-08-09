@@ -6,6 +6,7 @@ import { Button, Card, Input, Spinner, Tabs } from "./ui";
 import { listVideos, createVideo, generateCaptions, getVideoAssets } from "../api";
 import type { FarmVideoWithRelations, FarmVideoStatus } from "../types";
 import { probeVideoFile, uploadToBucket } from "../client-helpers";
+import { splitIntoSegments } from "../render";
 import { VideoDialog } from "./video-dialog";
 import { MusicTab } from "./music-tab";
 import { SettingsTab } from "./settings-tab";
@@ -117,36 +118,74 @@ function UploadDropzone({ onUploaded }: { onUploaded: () => void }) {
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
 
+  // Ingest one <=60s clip: upload + thumbnail + DB row + captions.
+  const ingestClip = useCallback(
+    async (clip: File, clipTitle: string) => {
+      const probe = await probeVideoFile(clip);
+      const sourcePath = await uploadToBucket("farm-uploads", clip, {
+        contentType: clip.type || "video/mp4",
+      });
+      let thumbnailPath: string | null = null;
+      if (probe.poster) {
+        thumbnailPath = await uploadToBucket("farm-uploads", probe.poster, {
+          ext: "jpg", contentType: "image/jpeg",
+        });
+      }
+      const id = await createVideo({
+        title: clipTitle,
+        description: description.trim() || null,
+        source_path: sourcePath,
+        source_mime: clip.type || "video/mp4",
+        source_size: clip.size,
+        duration_sec: probe.duration || null,
+        width: probe.width || null,
+        height: probe.height || null,
+        thumbnail_path: thumbnailPath,
+      });
+      try { await generateCaptions(id); }
+      catch (e) { console.error("caption gen failed", e); }
+      return id;
+    },
+    [description],
+  );
+
   const handleFile = useCallback(async (file: File) => {
     if (!file.type.startsWith("video/")) return toast.error("That's not a video file");
     if (file.size > 300 * 1024 * 1024) return toast.error("Video is over 300 MB — please trim it first");
+    const base = title.trim() || file.name.replace(/\.[^.]+$/, "");
     try {
       setBusy("Reading clip…");
       const probe = await probeVideoFile(file);
-      setBusy("Uploading…");
-      const sourcePath = await uploadToBucket("farm-uploads", file, { contentType: file.type });
-      let thumbnailPath: string | null = null;
-      if (probe.poster) thumbnailPath = await uploadToBucket("farm-uploads", probe.poster, { ext: "jpg", contentType: "image/jpeg" });
-      setBusy("Saving…");
-      const id = await createVideo({
-        title: title.trim() || file.name.replace(/\.[^.]+$/, ""),
-        description: description.trim() || null,
-        source_path: sourcePath, source_mime: file.type, source_size: file.size,
-        duration_sec: probe.duration || null, width: probe.width || null, height: probe.height || null,
-        thumbnail_path: thumbnailPath,
-      });
-      setBusy("Writing captions with Claude…");
-      try { await generateCaptions(id); }
-      catch (e) { console.error(e); toast.warning("Uploaded, but caption generation failed — retry in the editor."); }
-      setTitle(""); setDescription("");
-      toast.success("Short added — open it to review captions, music, and scheduling.");
+
+      if (probe.duration && probe.duration > 60) {
+        // Long clip → split into <=1-minute parts; only sub-minute clips post.
+        setBusy("Splitting into 1-minute clips…");
+        const segments = await splitIntoSegments(file, 60);
+        let made = 0;
+        for (let i = 0; i < segments.length; i++) {
+          setBusy(`Processing part ${i + 1} of ${segments.length}…`);
+          const segFile = new File([segments[i]], `${base}-part${i + 1}.mp4`, { type: "video/mp4" });
+          const sp = await probeVideoFile(segFile);
+          if (sp.duration && sp.duration < 3) continue; // drop tiny tail
+          await ingestClip(segFile, `${base} (Part ${i + 1})`);
+          made++;
+          onUploaded();
+        }
+        setTitle(""); setDescription("");
+        toast.success(`Split into ${made} clip${made === 1 ? "" : "s"} under a minute — captions added.`);
+      } else {
+        setBusy("Uploading…");
+        await ingestClip(file, base);
+        setTitle(""); setDescription("");
+        toast.success("Short added — open it to review captions, music, and scheduling.");
+      }
       onUploaded();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Upload failed");
     } finally {
       setBusy(null);
     }
-  }, [title, description, onUploaded]);
+  }, [title, description, onUploaded, ingestClip]);
 
   return (
     <Card className="space-y-3 p-4">
@@ -179,7 +218,7 @@ function UploadDropzone({ onUploaded }: { onUploaded: () => void }) {
           <div className="flex flex-col items-center gap-2">
             <UploadCloud className="size-8 text-green-900/40" />
             <p className="text-sm font-medium text-green-900">Drop a short here, or click to choose</p>
-            <p className="text-xs text-green-900/50">MP4 / MOV / WebM · up to 300 MB · vertical 9:16 works best</p>
+            <p className="text-xs text-green-900/50">MP4 / MOV / WebM · up to 300 MB · 9:16 works best · clips over 1 min auto-split into parts</p>
           </div>
         )}
         <input ref={inputRef} type="file" accept="video/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
