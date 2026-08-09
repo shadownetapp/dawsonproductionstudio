@@ -3,7 +3,7 @@
 // ffmpeg.wasm. Everything here is generated from scratch — there is no sampled
 // or third-party audio — so the beds are original and royalty-free.
 
-export type MusicPresetKey = "sunrise" | "golden" | "trot" | "barn" | "fields";
+export type MusicPresetKey = string;
 
 type Preset = {
   key: MusicPresetKey;
@@ -20,7 +20,7 @@ type Preset = {
 const midi = (n: number) => 440 * Math.pow(2, (n - 69) / 12);
 
 // A few gentle, farm-friendly progressions (roman numerals commented).
-export const MUSIC_PRESETS: Record<MusicPresetKey, Preset> = {
+export const MUSIC_PRESETS: Record<string, Preset> = {
   sunrise: {
     key: "sunrise",
     label: "Sunrise Pasture",
@@ -96,6 +96,21 @@ export const MUSIC_PRESETS: Record<MusicPresetKey, Preset> = {
     leadType: "triangle",
     brightness: 2800,
   },
+  meadow:     { key: "meadow",     label: "Meadow Breeze",  bpm: 80,  chords: [[62,66,69],[59,62,66],[57,60,64],[55,59,62]], padType: "sine",     leadType: "sine",     brightness: 2400 },
+  porch:      { key: "porch",      label: "Front Porch",    bpm: 70,  chords: [[53,57,60],[55,59,62],[57,60,64],[53,57,60]], padType: "triangle", leadType: "triangle", brightness: 2100 },
+  hoedown:    { key: "hoedown",    label: "Hoedown",        bpm: 120, chords: [[55,59,62],[60,64,67],[55,59,62],[62,66,69]], padType: "triangle", leadType: "square",   brightness: 3400 },
+  bigsky:     { key: "bigsky",     label: "Big Sky",        bpm: 88,  chords: [[57,64,69],[55,62,67],[53,60,65],[59,66,71]], padType: "sine",     leadType: "triangle", brightness: 3000 },
+  campfire:   { key: "campfire",   label: "Campfire",       bpm: 74,  chords: [[57,60,64],[62,65,69],[53,57,60],[55,59,62]], padType: "sine",     leadType: "sine",     brightness: 1900 },
+  creek:      { key: "creek",      label: "Creekside",      bpm: 78,  chords: [[60,64,67],[62,65,69],[57,60,64],[59,62,66]], padType: "sine",     leadType: "triangle", brightness: 2500 },
+  rodeo:      { key: "rodeo",      label: "Rodeo Nights",   bpm: 128, chords: [[57,60,64],[64,67,71],[60,64,67],[55,59,62]], padType: "square",   leadType: "square",   brightness: 3600 },
+  harvest:    { key: "harvest",    label: "Harvest Moon",   bpm: 72,  chords: [[53,57,60],[57,60,64],[55,59,62],[60,64,67]], padType: "triangle", leadType: "sine",     brightness: 2200 },
+  wildflower: { key: "wildflower", label: "Wildflowers",    bpm: 96,  chords: [[62,66,69],[64,67,71],[59,62,66],[57,61,64]], padType: "triangle", leadType: "triangle", brightness: 3100 },
+  dusty:      { key: "dusty",      label: "Dusty Trail",    bpm: 68,  chords: [[57,60,64],[55,58,62],[53,57,60],[57,60,64]], padType: "sine",     leadType: "triangle", brightness: 1800 },
+  drive:      { key: "drive",      label: "Country Drive",  bpm: 112, chords: [[60,64,67],[67,71,74],[62,66,69],[55,59,62]], padType: "triangle", leadType: "square",   brightness: 3300 },
+  stillwater: { key: "stillwater", label: "Still Water",    bpm: 64,  chords: [[55,59,62],[57,60,64],[53,57,60],[52,55,59]], padType: "sine",     leadType: "sine",     brightness: 1700 },
+  chores:     { key: "chores",     label: "Morning Chores", bpm: 100, chords: [[60,64,67],[57,60,64],[62,65,69],[55,59,62]], padType: "triangle", leadType: "triangle", brightness: 2900 },
+  starlit:    { key: "starlit",    label: "Starlit Barn",   bpm: 76,  chords: [[57,60,64],[53,57,60],[55,58,62],[57,60,64]], padType: "sine",     leadType: "sine",     brightness: 2000 },
+  homestead:  { key: "homestead",  label: "Homestead",      bpm: 84,  chords: [[53,57,60],[60,64,67],[57,60,64],[55,59,62]], padType: "triangle", leadType: "triangle", brightness: 2600 },
 };
 
 /** Render a preset to a mono-ish stereo WAV of `seconds` length. Browser only. */

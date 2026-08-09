@@ -61,6 +61,7 @@ export type FarmVideo = {
   thumbnail_path: string | null;
   music_id: string | null;
   burn_caption: boolean;
+  mute_original: boolean;
   overlay_text: string | null;
   render_path: string | null;
   render_error: string | null;

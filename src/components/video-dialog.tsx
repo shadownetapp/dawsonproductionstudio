@@ -39,6 +39,7 @@ export function VideoDialog({
   const [description, setDescription] = useState(video.description ?? "");
   const [musicId, setMusicId] = useState<string | null>(video.music_id);
   const [burnCaption, setBurnCaption] = useState(video.burn_caption);
+  const [muteOriginal, setMuteOriginal] = useState(video.mute_original);
   const [overlayText, setOverlayText] = useState(video.overlay_text ?? "");
   const [renderProgress, setRenderProgress] = useState<number | null>(null);
 
@@ -47,14 +48,20 @@ export function VideoDialog({
     setDescription(video.description ?? "");
     setMusicId(video.music_id);
     setBurnCaption(video.burn_caption);
+    setMuteOriginal(video.mute_original);
     setOverlayText(video.overlay_text ?? "");
   }, [video.id]);
+
+  // Default the music picker to the first track so Render is never blocked.
+  useEffect(() => {
+    if (!musicId && music.data && music.data.length) setMusicId(music.data[0].id);
+  }, [music.data, musicId]);
 
   const saveMeta = useMutation({
     mutationFn: () => updateVideo(video.id, {
       title: title.trim() || "Untitled short",
       description: description.trim() || null,
-      music_id: musicId, burn_caption: burnCaption,
+      music_id: musicId, burn_caption: burnCaption, mute_original: muteOriginal,
       overlay_text: overlayText.trim() || null,
     }),
     onSuccess: () => { toast.success("Saved"); invalidate(); },
@@ -118,7 +125,7 @@ export function VideoDialog({
         : null;
 
       const out = await renderShort(srcBlob, {
-        music: musicBytes, musicExt, audioMode: "mix", captionText,
+        music: musicBytes, musicExt, audioMode: muteOriginal ? "replace" : "mix", captionText,
         onProgress: (r) => setRenderProgress(Math.round(r * 100)),
       });
       const renderPath = await uploadToBucket("farm-renders", out, { ext: "mp4", contentType: "video/mp4", path: `${video.id}.mp4` });
@@ -195,10 +202,16 @@ export function VideoDialog({
                   ))}
                 </select>
               </div>
-              <label className="flex items-end gap-2 pb-1 text-xs text-green-900">
-                <input type="checkbox" checked={burnCaption} onChange={(e) => setBurnCaption(e.target.checked)} className="size-4 accent-green-700" />
-                Burn caption onto video
-              </label>
+              <div className="flex flex-col justify-end gap-2 pb-1">
+                <label className="flex items-center gap-2 text-xs text-green-900">
+                  <input type="checkbox" checked={burnCaption} onChange={(e) => setBurnCaption(e.target.checked)} className="size-4 accent-green-700" />
+                  Burn caption onto video
+                </label>
+                <label className="flex items-center gap-2 text-xs text-green-900">
+                  <input type="checkbox" checked={muteOriginal} onChange={(e) => setMuteOriginal(e.target.checked)} className="size-4 accent-green-700" />
+                  Mute original sound (music only)
+                </label>
+              </div>
             </div>
             {burnCaption && (
               <div className="space-y-1">
@@ -291,7 +304,13 @@ function CaptionEditor({ video, onSaved }: { video: FarmVideoWithRelations; onSa
   return (
     <div className="space-y-2">
       <Tabs value={tab} onChange={(v) => setTab(v as FarmPlatform)} tabs={FARM_PLATFORMS.map((p) => ({ value: p, label: PLATFORM_LABELS[p] }))} />
-      <PlatformCaption key={tab} video={video} platform={tab} existing={byPlatform.get(tab)} onSaved={onSaved} />
+      <PlatformCaption
+        key={`${tab}:${byPlatform.get(tab)?.updated_at ?? "none"}`}
+        video={video}
+        platform={tab}
+        existing={byPlatform.get(tab)}
+        onSaved={onSaved}
+      />
     </div>
   );
 }
