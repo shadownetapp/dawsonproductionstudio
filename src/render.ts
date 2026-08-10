@@ -378,3 +378,107 @@ export async function insertMidroll(
   }
   return new Blob([data.slice().buffer], { type: "video/mp4" });
 }
+
+export type HighlightClip = { blob: Blob; start: number; end: number };
+
+/**
+ * Pick the liveliest moments of a long video and clip them into <=clipLen shorts.
+ * Heuristic: decode the audio, score each clipLen-window by RMS energy (talking,
+ * laughter, action, emphasis), then take the top non-overlapping windows spread
+ * across the video. Returns the clipped segments in chronological order.
+ * Throws if the audio can't be analyzed (caller can fall back to plain splitting).
+ */
+export async function clipHighlights(
+  file: File | Blob,
+  opts: { clipLen?: number; maxClips?: number; onProgress?: (ratio: number) => void } = {},
+): Promise<HighlightClip[]> {
+  const clipLen = opts.clipLen ?? 60;
+  const ff = await getFFmpeg();
+  const asFile = file instanceof File ? file : new File([file], "in.mp4", { type: "video/mp4" });
+  const inName = `hl_in.${inputExt(asFile.name)}`;
+  await ff.writeFile(inName, await fetchFile(asFile));
+
+  // 1) Extract a small mono 16kHz WAV for analysis.
+  await ff.exec(["-i", inName, "-vn", "-ac", "1", "-ar", "16000", "-f", "wav", "hl.wav"]);
+  const wav = (await ff.readFile("hl.wav")) as Uint8Array;
+  try { await ff.deleteFile("hl.wav"); } catch { /* ignore */ }
+
+  // 2) Decode + compute per-second RMS energy.
+  const AC: typeof AudioContext =
+    (window as unknown as { AudioContext?: typeof AudioContext }).AudioContext ||
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext!;
+  const actx = new AC();
+  let buf: AudioBuffer;
+  try {
+    buf = await actx.decodeAudioData(wav.slice().buffer);
+  } finally {
+    if (actx.state !== "closed") actx.close().catch(() => {});
+  }
+  const ch = buf.getChannelData(0);
+  const sr = buf.sampleRate;
+  const dur = buf.duration;
+  const secs = Math.max(1, Math.ceil(dur));
+  const energy = new Float32Array(secs);
+  for (let s = 0; s < secs; s++) {
+    const a = s * sr;
+    const b = Math.min(ch.length, (s + 1) * sr);
+    let sum = 0;
+    for (let i = a; i < b; i++) sum += ch[i] * ch[i];
+    energy[s] = b > a ? Math.sqrt(sum / (b - a)) : 0;
+  }
+
+  if (dur <= clipLen) {
+    const one = await trimClip(ff, inName, 0, dur);
+    try { await ff.deleteFile(inName); } catch { /* ignore */ }
+    return [{ blob: one, start: 0, end: dur }];
+  }
+
+  // 3) Score each window; take top non-overlapping windows.
+  const win = Math.round(clipLen);
+  const scored: Array<{ start: number; score: number }> = [];
+  for (let s = 0; s + win <= secs; s++) {
+    let sum = 0;
+    for (let k = 0; k < win; k++) sum += energy[s + k];
+    scored.push({ start: s, score: sum });
+  }
+  scored.sort((x, y) => y.score - x.score);
+  const maxClips = opts.maxClips ?? Math.min(6, Math.floor(dur / clipLen));
+  const chosen: Array<{ start: number; end: number }> = [];
+  for (const cand of scored) {
+    if (chosen.length >= maxClips) break;
+    const cs = cand.start;
+    const ce = cand.start + win;
+    if (chosen.some((h) => !(ce <= h.start || cs >= h.end))) continue; // no overlap
+    chosen.push({ start: cs, end: Math.min(dur, ce) });
+  }
+  chosen.sort((a, b) => a.start - b.start);
+
+  // 4) Cut each chosen window.
+  const out: HighlightClip[] = [];
+  for (let i = 0; i < chosen.length; i++) {
+    opts.onProgress?.(i / chosen.length);
+    const { start, end } = chosen[i];
+    const blob = await trimClip(ff, inName, start, end);
+    out.push({ blob, start, end });
+  }
+  try { await ff.deleteFile(inName); } catch { /* ignore */ }
+  return out;
+}
+
+/** Trim [start,end] from an already-written input to a fresh MP4 blob. */
+async function trimClip(ff: FFmpegLike, inName: string, start: number, end: number): Promise<Blob> {
+  const len = Math.max(0.5, end - start).toFixed(2);
+  const base = ["-ss", start.toFixed(2), "-i", inName, "-t", len];
+  const venc = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p", "-movflags", "+faststart"];
+  try {
+    await ff.exec([...base, ...venc, "-c:a", "aac", "-b:a", "160k", "clip_out.mp4"]);
+  } catch {
+    try { await ff.deleteFile("clip_out.mp4"); } catch { /* ignore */ }
+    await ff.exec([...base, "-an", ...venc, "clip_out.mp4"]);
+  }
+  const data = (await ff.readFile("clip_out.mp4")) as Uint8Array;
+  try { await ff.deleteFile("clip_out.mp4"); } catch { /* ignore */ }
+  return new Blob([data.slice().buffer], { type: "video/mp4" });
+}
+
+type FFmpegLike = Awaited<ReturnType<typeof getFFmpeg>>;

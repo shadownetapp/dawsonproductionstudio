@@ -6,7 +6,7 @@ import { Button, Card, Input, Spinner } from "./ui";
 import { listVideos, createVideo, updateVideo, generateCaptions, getVideoAssets, listMusic } from "../api";
 import type { FarmVideoWithRelations, FarmVideoStatus, FarmMusic, FarmWorkspace } from "../types";
 import { probeVideoFile, uploadToBucket, shortHook } from "../client-helpers";
-import { splitIntoSegments, renderShort } from "../render";
+import { splitIntoSegments, clipHighlights, renderShort } from "../render";
 import { renderMusicBed, type MusicPresetKey } from "../music";
 import { VideoDialog } from "./video-dialog";
 
@@ -157,19 +157,38 @@ function UploadDropzone({ workspace, onUploaded }: { workspace: FarmWorkspace; o
       const beds = (await listMusic()).filter((m) => m.kind === "procedural");
 
       if (probe.duration && probe.duration > 60) {
-        setBusy("Splitting into 1-minute clips…");
-        const segments = await splitIntoSegments(file, 60);
+        // Pick the liveliest moments; fall back to sequential 1-min cuts.
+        setBusy("Finding the best moments…");
+        let segments: Blob[];
+        let mode = "highlight";
+        try {
+          const clips = await clipHighlights(file, {
+            clipLen: 60,
+            onProgress: (r) => setBusy(`Analyzing best moments ${Math.round(r * 100)}%…`),
+          });
+          segments = clips.map((c) => c.blob);
+        } catch (e) {
+          console.error("highlight analysis failed, splitting sequentially", e);
+          setBusy("Splitting into 1-minute clips…");
+          segments = await splitIntoSegments(file, 60);
+          mode = "split";
+        }
         let made = 0;
         for (let i = 0; i < segments.length; i++) {
-          const segFile = new File([segments[i]], `${base}-part${i + 1}.mp4`, { type: "video/mp4" });
+          const segFile = new File([segments[i]], `${base}-clip${i + 1}.mp4`, { type: "video/mp4" });
           const sp = await probeVideoFile(segFile);
           if (sp.duration && sp.duration < 3) continue;
-          await ingestClip(segFile, `${base} (Part ${i + 1})`, made, beds, `Part ${i + 1}/${segments.length}: `);
+          const partLabel = mode === "highlight" ? "Highlight" : "Part";
+          await ingestClip(segFile, `${base} (${partLabel} ${i + 1})`, made, beds, `Clip ${i + 1}/${segments.length}: `);
           made++;
           onUploaded();
         }
         setTitle(""); setDescription("");
-        toast.success(`Split into ${made} finished clip${made === 1 ? "" : "s"} — music + captions burned in.`);
+        toast.success(
+          mode === "highlight"
+            ? `Pulled ${made} highlight clip${made === 1 ? "" : "s"} — music + captions burned in.`
+            : `Split into ${made} clip${made === 1 ? "" : "s"} — music + captions burned in.`,
+        );
       } else {
         await ingestClip(file, base, 0, beds, "");
         setTitle(""); setDescription("");
@@ -214,7 +233,7 @@ function UploadDropzone({ workspace, onUploaded }: { workspace: FarmWorkspace; o
           <div className="flex flex-col items-center gap-2">
             <UploadCloud className="size-8 text-green-900/40" />
             <p className="text-sm font-medium text-green-900">Drop a short here, or click to choose</p>
-            <p className="text-xs text-green-900/50">MP4 / MOV / WebM · up to 300 MB · 9:16 works best · clips over 1 min auto-split into parts</p>
+            <p className="text-xs text-green-900/50">MP4 / MOV / WebM · up to 300 MB · 9:16 works best · long clips → best moments auto-clipped (≤1 min)</p>
           </div>
         )}
         <input ref={inputRef} type="file" accept="video/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
