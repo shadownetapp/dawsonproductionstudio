@@ -288,3 +288,93 @@ export async function splitIntoSegments(
   try { await ff.deleteFile(inName); } catch { /* ignore */ }
   return out;
 }
+
+/**
+ * Long-form mid-roll: split the main video at its midpoint and splice the
+ * bumper/commercial in between (main first half → bumper → main second half).
+ * The bumper is scaled/padded to the main video's frame. Re-encodes to H.264/AAC.
+ * Browser-based, so best for reasonably sized long-form clips.
+ */
+export async function insertMidroll(
+  main: File | Blob,
+  bumper: File | Blob,
+  opts: { onProgress?: (ratio: number) => void } = {},
+): Promise<Blob> {
+  const ff = await getFFmpeg();
+  const mainFile = main instanceof File ? main : new File([main], "main.mp4", { type: "video/mp4" });
+  const bumpFile = bumper instanceof File ? bumper : new File([bumper], "bump.mp4", { type: "video/mp4" });
+  const probe = await probeVideo(mainFile);
+  const w = probe.width ?? 1920;
+  const h = probe.height ?? 1080;
+  const dur = probe.durationSec ?? 0;
+  if (dur <= 1) throw new Error("Main video is too short to split");
+  const mid = (dur / 2).toFixed(2);
+
+  const mainName = `mr_main.${inputExt(mainFile.name)}`;
+  const bumpName = `mr_bump.${inputExt(bumpFile.name)}`;
+  await ff.writeFile(mainName, await fetchFile(mainFile));
+  await ff.writeFile(bumpName, await fetchFile(bumpFile));
+
+  const scalePad = `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
+
+  let log = "";
+  const logCollector = ({ message }: { message: string }) => { log += message + "\n"; };
+  const progressHandler = ({ progress }: { progress: number }) => opts.onProgress?.(progress);
+  ff.on("log", logCollector);
+  ff.on("progress", progressHandler);
+
+  const withAudio = [
+    "-i", mainName, "-i", bumpName,
+    "-filter_complex",
+    [
+      `[0:v]trim=0:${mid},setpts=PTS-STARTPTS[v0]`,
+      `[0:a]atrim=0:${mid},asetpts=PTS-STARTPTS[a0]`,
+      `[1:v]${scalePad},setpts=PTS-STARTPTS[v1]`,
+      `[1:a]asetpts=PTS-STARTPTS[a1]`,
+      `[0:v]trim=${mid},setpts=PTS-STARTPTS[v2]`,
+      `[0:a]atrim=${mid},asetpts=PTS-STARTPTS[a2]`,
+      `[v0][a0][v1][a1][v2][a2]concat=n=3:v=1:a=1[v][a]`,
+    ].join(";"),
+    "-map", "[v]", "-map", "[a]",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", "mr_out.mp4",
+  ];
+  const videoOnly = [
+    "-i", mainName, "-i", bumpName,
+    "-filter_complex",
+    [
+      `[0:v]trim=0:${mid},setpts=PTS-STARTPTS[v0]`,
+      `[1:v]${scalePad},setpts=PTS-STARTPTS[v1]`,
+      `[0:v]trim=${mid},setpts=PTS-STARTPTS[v2]`,
+      `[v0][v1][v2]concat=n=3:v=1[v]`,
+    ].join(";"),
+    "-map", "[v]", "-an",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p",
+    "-movflags", "+faststart", "mr_out.mp4",
+  ];
+
+  let ok = false;
+  try {
+    try {
+      await ff.exec(withAudio);
+      ok = true;
+    } catch {
+      try { await ff.deleteFile("mr_out.mp4"); } catch { /* ignore */ }
+      await ff.exec(videoOnly); // bumper or main lacked an audio track
+      ok = true;
+    }
+  } finally {
+    ff.off("progress", progressHandler);
+    ff.off("log", logCollector);
+  }
+  if (!ok) {
+    const tail = log.split("\n").slice(-12).join("\n");
+    throw new Error(`mid-roll insert failed: ${tail || "unknown error"}`);
+  }
+
+  const data = (await ff.readFile("mr_out.mp4")) as Uint8Array;
+  for (const f of [mainName, bumpName, "mr_out.mp4"]) {
+    try { await ff.deleteFile(f); } catch { /* ignore */ }
+  }
+  return new Blob([data.slice().buffer], { type: "video/mp4" });
+}

@@ -9,11 +9,10 @@ const VIDEO_SELECT =
   "*, captions:farm_captions(*), posts:farm_posts(*), music:farm_music(id,title,kind,preset_key)";
 
 // ---------- Videos ----------
-export async function listVideos(): Promise<FarmVideoWithRelations[]> {
-  const { data, error } = await supabase
-    .from("farm_videos")
-    .select(VIDEO_SELECT)
-    .order("created_at", { ascending: false });
+export async function listVideos(workspace?: string): Promise<FarmVideoWithRelations[]> {
+  let q = supabase.from("farm_videos").select(VIDEO_SELECT).order("created_at", { ascending: false });
+  if (workspace) q = q.eq("workspace", workspace);
+  const { data, error } = await q;
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as FarmVideoWithRelations[];
 }
@@ -28,11 +27,13 @@ export async function createVideo(payload: {
   width: number | null;
   height: number | null;
   thumbnail_path: string | null;
+  workspace?: string;
+  midroll_path?: string | null;
 }): Promise<string> {
   const { data: userData } = await supabase.auth.getUser();
   const { data, error } = await supabase
     .from("farm_videos")
-    .insert({ ...payload, created_by: userData.user?.id ?? null })
+    .insert({ workspace: "farm", ...payload, created_by: userData.user?.id ?? null })
     .select("id")
     .single();
   if (error) throw new Error(error.message);
@@ -212,8 +213,12 @@ function nextOpenSlot(slots: string[], tz: string, taken: Set<string>): string |
   return null;
 }
 
-export async function scheduleVideo(videoId: string): Promise<{ scheduledAt: string; platforms: FarmPlatform[] }> {
+export async function scheduleVideo(
+  videoId: string,
+  platformsOverride?: FarmPlatform[],
+): Promise<{ scheduledAt: string; platforms: FarmPlatform[] }> {
   const settings = await getSettings();
+  const platforms = platformsOverride ?? settings.platforms;
   const { data: existing } = await supabase
     .from("farm_posts").select("scheduled_at").in("status", ["queued", "ready"]);
   const taken = new Set<string>(
@@ -222,13 +227,13 @@ export async function scheduleVideo(videoId: string): Promise<{ scheduledAt: str
   const next = nextOpenSlot(settings.daily_slots, settings.timezone, taken);
   if (!next) throw new Error("No open slot found in the next 120 days");
 
-  const rows = settings.platforms.map((p) => ({
+  const rows = platforms.map((p) => ({
     video_id: videoId, platform: p, scheduled_at: next, status: "queued",
   }));
   const { error } = await supabase.from("farm_posts").upsert(rows, { onConflict: "video_id,platform" });
   if (error) throw new Error(error.message);
   await supabase.from("farm_videos").update({ status: "scheduled" }).eq("id", videoId);
-  return { scheduledAt: next, platforms: settings.platforms };
+  return { scheduledAt: next, platforms };
 }
 
 export async function unscheduleVideo(videoId: string) {

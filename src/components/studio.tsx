@@ -1,16 +1,14 @@
 import { useCallback, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { UploadCloud, Music2, Settings2, Clapperboard, Loader2 } from "lucide-react";
-import { Button, Card, Input, Spinner, Tabs } from "./ui";
+import { UploadCloud, Clapperboard, Loader2 } from "lucide-react";
+import { Button, Card, Input, Spinner } from "./ui";
 import { listVideos, createVideo, updateVideo, generateCaptions, getVideoAssets, listMusic } from "../api";
-import type { FarmVideoWithRelations, FarmVideoStatus, FarmMusic } from "../types";
+import type { FarmVideoWithRelations, FarmVideoStatus, FarmMusic, FarmWorkspace } from "../types";
 import { probeVideoFile, uploadToBucket, shortHook } from "../client-helpers";
 import { splitIntoSegments, renderShort } from "../render";
 import { renderMusicBed, type MusicPresetKey } from "../music";
 import { VideoDialog } from "./video-dialog";
-import { MusicTab } from "./music-tab";
-import { SettingsTab } from "./settings-tab";
 
 const STATUS_STYLES: Record<FarmVideoStatus, string> = {
   draft: "bg-green-900/10 text-green-900/70",
@@ -27,35 +25,15 @@ const STATUS_LABEL: Record<FarmVideoStatus, string> = {
   scheduled: "Scheduled", published: "Published", archived: "Archived", failed: "Failed",
 };
 
-export function Studio() {
-  const [tab, setTab] = useState("queue");
-  return (
-    <div className="space-y-4">
-      <Tabs
-        value={tab}
-        onChange={setTab}
-        tabs={[
-          { value: "queue", label: <span className="inline-flex items-center gap-1.5"><Clapperboard className="size-4" /> Queue</span> },
-          { value: "music", label: <span className="inline-flex items-center gap-1.5"><Music2 className="size-4" /> Music</span> },
-          { value: "settings", label: <span className="inline-flex items-center gap-1.5"><Settings2 className="size-4" /> Settings</span> },
-        ]}
-      />
-      {tab === "queue" && <QueueTab />}
-      {tab === "music" && <MusicTab />}
-      {tab === "settings" && <SettingsTab />}
-    </div>
-  );
-}
-
-function QueueTab() {
+export function ShortsWorkspace({ workspace }: { workspace: FarmWorkspace }) {
   const qc = useQueryClient();
-  const videos = useQuery({ queryKey: ["videos"], queryFn: listVideos });
+  const videos = useQuery({ queryKey: ["videos", workspace], queryFn: () => listVideos(workspace) });
   const [openId, setOpenId] = useState<string | null>(null);
   const openVideo = videos.data?.find((v) => v.id === openId) ?? null;
 
   return (
     <div className="space-y-6">
-      <UploadDropzone onUploaded={() => qc.invalidateQueries({ queryKey: ["videos"] })} />
+      <UploadDropzone workspace={workspace} onUploaded={() => qc.invalidateQueries({ queryKey: ["videos"] })} />
       {videos.isLoading ? (
         <Spinner label="Loading your shorts…" />
       ) : (videos.data?.length ?? 0) === 0 ? (
@@ -65,9 +43,7 @@ function QueueTab() {
           {videos.data!.map((v) => <VideoCard key={v.id} video={v} onOpen={() => setOpenId(v.id)} />)}
         </div>
       )}
-      {openVideo && (
-        <VideoDialog video={openVideo} open={!!openId} onClose={() => setOpenId(null)} />
-      )}
+      {openVideo && <VideoDialog video={openVideo} open={!!openId} onClose={() => setOpenId(null)} />}
     </div>
   );
 }
@@ -112,28 +88,21 @@ function Thumb({ video }: { video: FarmVideoWithRelations }) {
   return <img src={q.data} alt={video.title} className="h-full w-full object-cover" />;
 }
 
-function UploadDropzone({ onUploaded }: { onUploaded: () => void }) {
+function UploadDropzone({ workspace, onUploaded }: { workspace: FarmWorkspace; onUploaded: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
 
-  // Ingest one <=60s clip end-to-end: upload → captions → auto-render
-  // (music bed + burned-in caption) → mark ready. The finished, captioned video
-  // is produced automatically, no manual render step.
   const ingestClip = useCallback(
     async (clip: File, clipTitle: string, idx: number, beds: FarmMusic[], label: string) => {
       setBusy(`${label}uploading…`);
       const probe = await probeVideoFile(clip);
-      const sourcePath = await uploadToBucket("farm-uploads", clip, {
-        contentType: clip.type || "video/mp4",
-      });
+      const sourcePath = await uploadToBucket("farm-uploads", clip, { contentType: clip.type || "video/mp4" });
       let thumbnailPath: string | null = null;
       if (probe.poster) {
-        thumbnailPath = await uploadToBucket("farm-uploads", probe.poster, {
-          ext: "jpg", contentType: "image/jpeg",
-        });
+        thumbnailPath = await uploadToBucket("farm-uploads", probe.poster, { ext: "jpg", contentType: "image/jpeg" });
       }
       const id = await createVideo({
         title: clipTitle,
@@ -145,6 +114,7 @@ function UploadDropzone({ onUploaded }: { onUploaded: () => void }) {
         width: probe.width || null,
         height: probe.height || null,
         thumbnail_path: thumbnailPath,
+        workspace,
       });
 
       setBusy(`${label}writing captions…`);
@@ -158,30 +128,23 @@ function UploadDropzone({ onUploaded }: { onUploaded: () => void }) {
       }
       const captionText = shortHook(igCaption) || clipTitle;
 
-      // Auto-render: music bed + burned-in caption, straight from the local file.
       setBusy(`${label}adding music + captions…`);
       const bed = beds.length ? beds[idx % beds.length] : null;
       try {
         const secs = Math.max(15, Math.min(90, Math.ceil((probe.duration ?? 30) + 2)));
         const musicBytes = await renderMusicBed((bed?.preset_key ?? "sunrise") as MusicPresetKey, secs);
         const out = await renderShort(clip, {
-          music: musicBytes,
-          musicExt: "wav",
-          audioMode: "mix",
-          captionText,
+          music: musicBytes, musicExt: "wav", audioMode: "mix", captionText,
           onProgress: (r) => setBusy(`${label}rendering ${Math.round(r * 100)}%…`),
         });
-        const renderPath = await uploadToBucket("farm-renders", out, {
-          ext: "mp4", contentType: "video/mp4", path: `${id}.mp4`,
-        });
+        const renderPath = await uploadToBucket("farm-renders", out, { ext: "mp4", contentType: "video/mp4", path: `${id}.mp4` });
         await updateVideo(id, { render_path: renderPath, status: "ready", music_id: bed?.id ?? null });
       } catch (e) {
         console.error("auto-render failed", e);
-        // Leave as 'captioned' so the user can render manually from the editor.
       }
       return id;
     },
-    [description],
+    [description, workspace],
   );
 
   const handleFile = useCallback(async (file: File) => {
@@ -194,14 +157,13 @@ function UploadDropzone({ onUploaded }: { onUploaded: () => void }) {
       const beds = (await listMusic()).filter((m) => m.kind === "procedural");
 
       if (probe.duration && probe.duration > 60) {
-        // Long clip → split into <=1-minute parts; each rendered + captioned.
         setBusy("Splitting into 1-minute clips…");
         const segments = await splitIntoSegments(file, 60);
         let made = 0;
         for (let i = 0; i < segments.length; i++) {
           const segFile = new File([segments[i]], `${base}-part${i + 1}.mp4`, { type: "video/mp4" });
           const sp = await probeVideoFile(segFile);
-          if (sp.duration && sp.duration < 3) continue; // drop tiny tail
+          if (sp.duration && sp.duration < 3) continue;
           await ingestClip(segFile, `${base} (Part ${i + 1})`, made, beds, `Part ${i + 1}/${segments.length}: `);
           made++;
           onUploaded();

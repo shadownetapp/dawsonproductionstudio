@@ -8,6 +8,14 @@ export const PLATFORM_LABELS: Record<FarmPlatform, string> = {
   facebook: "Facebook Reels",
 };
 
+export type FarmWorkspace = "farm" | "shadownet" | "longform";
+
+export const WORKSPACE_LABELS: Record<FarmWorkspace, string> = {
+  farm: "Farm Shorts",
+  shadownet: "Shadownet Shorts",
+  longform: "Long Form",
+};
+
 export type FarmVideoStatus =
   | "draft" | "captioned" | "rendering" | "ready"
   | "scheduled" | "published" | "archived" | "failed";
@@ -59,10 +67,12 @@ export type FarmVideo = {
   width: number | null;
   height: number | null;
   thumbnail_path: string | null;
+  workspace: FarmWorkspace;
   music_id: string | null;
   burn_caption: boolean;
   mute_original: boolean;
   overlay_text: string | null;
+  midroll_path: string | null;
   render_path: string | null;
   render_error: string | null;
   created_at: string;
