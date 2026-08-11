@@ -67,6 +67,18 @@ export function MusicTab() {
 const AUDIO_EXT = /\.(mp3|m4a|wav|aac|ogg|oga|flac)$/i;
 const MAX_BYTES = 30 * 1024 * 1024;
 
+// Guess a mood from the file name so uploaded tracks join the auto-picker.
+function moodFromName(name: string): string | null {
+  const t = name.toLowerCase();
+  const has = (w: string[]) => w.some((x) => t.includes(x));
+  if (has(["upbeat", "energ", "hype", "party", "dance", "fast", "rock", "epic", "action"])) return "upbeat";
+  if (has(["warm", "happy", "feel", "uplift", "family", "cozy", "acoustic", "folk"])) return "warm";
+  if (has(["calm", "chill", "relax", "ambient", "peace", "soft", "mellow", "lofi", "lo-fi"])) return "calm";
+  if (has(["bright", "sunny", "pop", "fun", "playful", "cheer"])) return "bright";
+  if (has(["country", "trail", "western", "guitar", "road"])) return "chill";
+  return null;
+}
+
 function UploadTrack({ onDone }: { onDone: () => void }) {
   const filesRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
@@ -96,7 +108,7 @@ function UploadTrack({ onDone }: { onDone: () => void }) {
         });
         // Tidy a title from the filename: strip ext, turn separators into spaces.
         const title = file.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim();
-        await registerTrack(title || file.name, path);
+        await registerTrack(title || file.name, path, moodFromName(file.name));
         added++;
       } catch (e) {
         console.error("track upload failed", file.name, e);

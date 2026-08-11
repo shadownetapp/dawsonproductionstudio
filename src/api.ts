@@ -113,13 +113,19 @@ export async function listMusic(): Promise<FarmMusic[]> {
   return (data ?? []) as unknown as FarmMusic[];
 }
 
-export async function registerTrack(title: string, storage_path: string) {
+export async function registerTrack(title: string, storage_path: string, mood?: string | null) {
   const { data: userData } = await supabase.auth.getUser();
   const { error } = await supabase.from("farm_music").insert({
-    title, kind: "upload", storage_path, license: "Owner-supplied",
+    title, kind: "upload", storage_path, mood: mood ?? null, license: "Owner-supplied",
     created_by: userData.user?.id ?? null,
   });
   if (error) throw new Error(error.message);
+}
+
+/** Signed URL for an uploaded music track (farm-music bucket). */
+export async function signMusicUrl(path: string): Promise<string | null> {
+  const { data } = await supabase.storage.from("farm-music").createSignedUrl(path, 3600);
+  return data?.signedUrl ?? null;
 }
 
 export async function deleteTrack(id: string) {

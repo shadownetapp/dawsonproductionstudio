@@ -3,9 +3,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { UploadCloud, Clapperboard, Loader2 } from "lucide-react";
 import { Button, Card, Input, Spinner } from "./ui";
-import { listVideos, createVideo, updateVideo, generateCaptions, getVideoAssets, listMusic } from "../api";
+import { listVideos, createVideo, updateVideo, generateCaptions, getVideoAssets, listMusic, signMusicUrl } from "../api";
 import type { FarmVideoWithRelations, FarmVideoStatus, FarmMusic, FarmWorkspace } from "../types";
-import { probeVideoFile, uploadToBucket, shortHook } from "../client-helpers";
+import { probeVideoFile, uploadToBucket, shortHook, fetchBytes, extFromUrl } from "../client-helpers";
 import { splitIntoSegments, clipHighlights, renderShort } from "../render";
 import { renderMusicBed, type MusicPresetKey } from "../music";
 import { VideoDialog } from "./video-dialog";
@@ -26,9 +26,12 @@ function pickMood(text: string): string {
 
 function pickBed(beds: FarmMusic[], text: string): FarmMusic | null {
   if (!beds.length) return null;
+  // Prefer real uploaded tracks over the synthesized beds when any exist.
+  const uploads = beds.filter((b) => b.kind === "upload");
+  const source = uploads.length ? uploads : beds;
   const mood = pickMood(text);
-  const pool = beds.filter((b) => (b.mood ?? "") === mood);
-  const from = pool.length ? pool : beds;
+  const pool = source.filter((b) => (b.mood ?? "") === mood);
+  const from = pool.length ? pool : source;
   return from[Math.floor(Math.random() * from.length)];
 }
 
@@ -154,9 +157,18 @@ function UploadDropzone({ workspace, onUploaded }: { workspace: FarmWorkspace; o
       const bed = pickBed(beds, `${clipTitle} ${description} ${igCaption}`);
       try {
         const secs = Math.max(15, Math.min(90, Math.ceil((probe.duration ?? 30) + 2)));
-        const musicBytes = await renderMusicBed((bed?.preset_key ?? "sunrise") as MusicPresetKey, secs);
+        let musicBytes: Uint8Array;
+        let musicExt = "wav";
+        if (bed?.kind === "upload" && bed.storage_path) {
+          const url = await signMusicUrl(bed.storage_path);
+          if (!url) throw new Error("music url");
+          musicBytes = await fetchBytes(url);
+          musicExt = extFromUrl(url, "mp3");
+        } else {
+          musicBytes = await renderMusicBed((bed?.preset_key ?? "sunrise") as MusicPresetKey, secs);
+        }
         const out = await renderShort(clip, {
-          music: musicBytes, musicExt: "wav", audioMode: "mix", captionText,
+          music: musicBytes, musicExt, audioMode: "mix", captionText,
           onProgress: (r) => setBusy(`${label}rendering ${Math.round(r * 100)}%…`),
         });
         const renderPath = await uploadToBucket("farm-renders", out, { ext: "mp4", contentType: "video/mp4", path: `${id}.mp4` });
@@ -176,7 +188,7 @@ function UploadDropzone({ workspace, onUploaded }: { workspace: FarmWorkspace; o
     try {
       setBusy("Reading clip…");
       const probe = await probeVideoFile(file);
-      const beds = (await listMusic()).filter((m) => m.kind === "procedural");
+      const beds = await listMusic(); // real uploads preferred by pickBed; synth beds as fallback
 
       if (probe.duration && probe.duration > 60) {
         // Pick the liveliest moments; fall back to sequential 1-min cuts.
