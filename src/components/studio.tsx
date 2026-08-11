@@ -10,6 +10,28 @@ import { splitIntoSegments, clipHighlights, renderShort } from "../render";
 import { renderMusicBed, type MusicPresetKey } from "../music";
 import { VideoDialog } from "./video-dialog";
 
+// Rough mood inference from the clip's title/description/caption so we can
+// auto-pick a fitting music bed (moods match the seeded beds: calm/warm/upbeat/
+// bright/chill).
+function pickMood(text: string): string {
+  const t = text.toLowerCase();
+  const has = (words: string[]) => words.some((w) => t.includes(w));
+  if (has(["gallop", "run", "rodeo", "race", "fast", "action", "energy", "jump", "play", "dance", "hoedown", "chase", "excit"])) return "upbeat";
+  if (has(["sunrise", "morning", "warm", "family", "cozy", "campfire", "home", "gentle", "love", "calf", "foal", "baby", "sweet"])) return "warm";
+  if (has(["sunset", "calm", "still", "quiet", "peace", "rest", "night", "slow", "graze", "serene", "relax"])) return "calm";
+  if (has(["field", "sky", "bright", "sunny", "open", "meadow", "wild", "bloom", "spring", "fresh"])) return "bright";
+  if (has(["trail", "dusty", "ride", "chill", "drive", "road", "wander"])) return "chill";
+  return ["calm", "warm", "upbeat", "bright", "chill"][Math.floor(Math.random() * 5)];
+}
+
+function pickBed(beds: FarmMusic[], text: string): FarmMusic | null {
+  if (!beds.length) return null;
+  const mood = pickMood(text);
+  const pool = beds.filter((b) => (b.mood ?? "") === mood);
+  const from = pool.length ? pool : beds;
+  return from[Math.floor(Math.random() * from.length)];
+}
+
 const STATUS_STYLES: Record<FarmVideoStatus, string> = {
   draft: "bg-green-900/10 text-green-900/70",
   captioned: "bg-blue-100 text-blue-700",
@@ -129,7 +151,7 @@ function UploadDropzone({ workspace, onUploaded }: { workspace: FarmWorkspace; o
       const captionText = shortHook(igCaption) || clipTitle;
 
       setBusy(`${label}adding music + captions…`);
-      const bed = beds.length ? beds[idx % beds.length] : null;
+      const bed = pickBed(beds, `${clipTitle} ${description} ${igCaption}`);
       try {
         const secs = Math.max(15, Math.min(90, Math.ceil((probe.duration ?? 30) + 2)));
         const musicBytes = await renderMusicBed((bed?.preset_key ?? "sunrise") as MusicPresetKey, secs);
