@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Plus, X, Save } from "lucide-react";
-import { Button, Card, Input, Label, Spinner } from "./ui";
+import { Plus, X, Save, Share2, ExternalLink, Link2 } from "lucide-react";
+import { Button, Card, Input, Label, Spinner, Badge } from "./ui";
 import { getSettings, updateSettings } from "../api";
 import { FARM_PLATFORMS, PLATFORM_LABELS, type FarmPlatform, type FarmSettings } from "../types";
 
@@ -49,6 +49,8 @@ export function SettingsTab() {
 
   return (
     <div className="max-w-2xl space-y-5">
+      <ConnectSocials />
+
       <Card className="space-y-4 p-4">
         <div className="space-y-1">
           <Label>Time zone</Label>
@@ -105,5 +107,36 @@ export function SettingsTab() {
 
       <Button onClick={() => save.mutate()} loading={save.isPending}><Save className="size-4" /> Save settings</Button>
     </div>
+  );
+}
+
+function ConnectSocials() {
+  return (
+    <Card className="space-y-3 p-4">
+      <div className="flex items-center justify-between">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-green-900">
+          <Share2 className="size-4 text-green-700" /> Connect your socials
+        </h3>
+        <Badge className="bg-amber-100 text-amber-700">Setup pending</Badge>
+      </div>
+      <p className="text-xs text-green-900/60">
+        Auto-posting runs through your <strong>Postiz</strong> account (it holds the platform logins).
+        Connect your accounts in Postiz, then link it here and scheduled clips publish automatically.
+      </p>
+      <ol className="list-decimal space-y-1 pl-5 text-xs text-green-900/70">
+        <li>In Postiz, add & connect your channels: {FARM_PLATFORMS.map((p) => PLATFORM_LABELS[p]).join(", ")}.</li>
+        <li>In Postiz → Settings → <strong>Public API</strong>, generate an API key.</li>
+        <li>Send me that key + your Postiz URL and I'll switch on auto-posting.</li>
+      </ol>
+      <div className="flex flex-wrap gap-2 pt-1">
+        <a href="https://postiz.com" target="_blank" rel="noreferrer">
+          <Button variant="outline"><ExternalLink className="size-4" /> Open Postiz</Button>
+        </a>
+        <Button variant="ghost" disabled><Link2 className="size-4" /> Link account (coming once keyed)</Button>
+      </div>
+      <p className="text-[11px] text-green-900/50">
+        Until this is linked, clips still schedule and you get the tap-to-post nudge as usual.
+      </p>
+    </Card>
   );
 }
