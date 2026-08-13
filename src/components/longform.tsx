@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { UploadCloud, Film, Download, CalendarPlus, CalendarX, Trash2, Wand2, Check, ExternalLink } from "lucide-react";
+import { UploadCloud, Film, Download, CalendarPlus, CalendarX, Trash2, Wand2, Check, ExternalLink, Share2 } from "lucide-react";
 import { Button, Card, Input, Textarea, Label, Modal, Spinner, Badge } from "./ui";
 import {
   listVideos, createVideo, updateVideo, deleteVideo, getVideoAssets,
-  generateCaptions, updateCaption, scheduleVideo, unscheduleVideo, markPosted,
+  generateCaptions, updateCaption, scheduleVideo, unscheduleVideo, markPosted, postizPublish,
 } from "../api";
 import type { FarmVideoWithRelations, FarmPlatform } from "../types";
 import { probeVideoFile, uploadToBucket } from "../client-helpers";
@@ -196,6 +196,11 @@ function LongDialog({ video, open, onClose }: { video: FarmVideoWithRelations; o
     onError: (e) => toast.error(e instanceof Error ? e.message : "Scheduling failed"),
   });
   const doUnschedule = useMutation({ mutationFn: () => unscheduleVideo(video.id), onSuccess: () => { toast.success("Unscheduled"); invalidate(); } });
+  const publishNow = useMutation({
+    mutationFn: () => postizPublish(video.id, LF_PLATFORMS),
+    onSuccess: (r) => { toast.success(`Posted to ${(r.published ?? []).join(", ") || "your channels"}`); invalidate(); },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Publish failed"),
+  });
   const doDelete = useMutation({
     mutationFn: () => deleteVideo(video.id),
     onSuccess: () => { toast.success("Deleted"); onClose(); invalidate(); },
@@ -250,6 +255,11 @@ function LongDialog({ video, open, onClose }: { video: FarmVideoWithRelations; o
               </div>
             ) : (
               <Button variant="outline" onClick={() => doSchedule.mutate()} loading={doSchedule.isPending}><CalendarPlus className="size-4" /> Schedule into next open slot</Button>
+            )}
+            {video.render_path && (
+              <Button onClick={() => publishNow.mutate()} loading={publishNow.isPending}>
+                <Share2 className="size-4" /> Publish now to YouTube + Facebook (Postiz)
+              </Button>
             )}
             {video.posts.length > 0 && (
               <div className="space-y-1.5 pt-1">

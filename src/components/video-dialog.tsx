@@ -2,12 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
-  Sparkles, Music2, Wand2, CalendarPlus, CalendarX, Trash2, Download, Check, ExternalLink, Loader2,
+  Sparkles, Music2, Wand2, CalendarPlus, CalendarX, Trash2, Download, Check, ExternalLink, Loader2, Share2,
 } from "lucide-react";
 import { Button, Card, Input, Label, Modal, Tabs, Textarea, Badge, cn } from "./ui";
 import {
   getVideoAssets, updateVideo, deleteVideo, generateCaptions, updateCaption,
-  listMusic, scheduleVideo, unscheduleVideo, markPosted,
+  listMusic, scheduleVideo, unscheduleVideo, markPosted, postizPublish,
 } from "../api";
 import {
   FARM_PLATFORMS, PLATFORM_LABELS,
@@ -82,6 +82,11 @@ export function VideoDialog({
   const doUnschedule = useMutation({
     mutationFn: () => unscheduleVideo(video.id),
     onSuccess: () => { toast.success("Removed from the schedule"); invalidate(); },
+  });
+  const publishNow = useMutation({
+    mutationFn: () => postizPublish(video.id),
+    onSuccess: (r) => { toast.success(`Posted to ${(r.published ?? []).join(", ") || "your channels"}`); invalidate(); },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Publish failed"),
   });
   const doDelete = useMutation({
     mutationFn: () => deleteVideo(video.id),
@@ -248,6 +253,11 @@ export function VideoDialog({
               </div>
             ) : (
               <Button variant="outline" onClick={() => doSchedule.mutate()} loading={doSchedule.isPending}><CalendarPlus className="size-4" /> Schedule into next open slot</Button>
+            )}
+            {video.render_path && !tooLong && (
+              <Button onClick={() => publishNow.mutate()} loading={publishNow.isPending}>
+                <Share2 className="size-4" /> Publish now to socials (Postiz)
+              </Button>
             )}
             {video.posts.length > 0 && (
               <div className="space-y-1.5 pt-1">

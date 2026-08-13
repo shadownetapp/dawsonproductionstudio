@@ -147,6 +147,35 @@ export async function generateCaptions(videoId: string, platforms?: FarmPlatform
   return data;
 }
 
+// ---------- Postiz (auto-posting) ----------
+async function invokePostiz(body: Record<string, unknown>) {
+  const { data, error } = await supabase.functions.invoke("postiz-publish", { body });
+  if (error) {
+    let msg = error.message;
+    try {
+      const j = await (error as { context?: { json?: () => Promise<{ error?: string }> } }).context?.json?.();
+      if (j?.error) msg = j.error;
+    } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+  if (data && (data as { error?: string }).error) throw new Error((data as { error: string }).error);
+  return data;
+}
+
+export async function postizTest() {
+  return (await invokePostiz({ action: "test" })) as {
+    ok?: boolean;
+    channels?: Array<{ id: string; name?: string; platform?: string; disabled?: boolean }>;
+  };
+}
+
+export async function postizPublish(videoId: string, platforms?: string[]) {
+  return (await invokePostiz({ action: "publish", videoId, platforms })) as {
+    ok?: boolean;
+    published?: string[];
+  };
+}
+
 export async function updateCaption(
   videoId: string,
   platform: FarmPlatform,

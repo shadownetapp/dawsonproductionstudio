@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Plus, X, Save, Share2, ExternalLink, Link2 } from "lucide-react";
 import { Button, Card, Input, Label, Spinner, Badge } from "./ui";
-import { getSettings, updateSettings } from "../api";
+import { getSettings, updateSettings, postizTest } from "../api";
 import { FARM_PLATFORMS, PLATFORM_LABELS, type FarmPlatform, type FarmSettings } from "../types";
 
 const COMMON_TZ = [
@@ -111,31 +111,70 @@ export function SettingsTab() {
 }
 
 function ConnectSocials() {
+  const [busy, setBusy] = useState(false);
+  const [channels, setChannels] = useState<Array<{ id: string; name?: string; platform?: string; disabled?: boolean }> | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const test = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const res = await postizTest();
+      setChannels(res.channels ?? []);
+    } catch (e) {
+      setChannels(null);
+      setErr(e instanceof Error ? e.message : "Test failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const connected = channels && channels.length > 0;
+
   return (
     <Card className="space-y-3 p-4">
       <div className="flex items-center justify-between">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-green-900">
-          <Share2 className="size-4 text-green-700" /> Connect your socials
+          <Share2 className="size-4 text-green-700" /> Connect your socials (Postiz)
         </h3>
-        <Badge className="bg-amber-100 text-amber-700">Setup pending</Badge>
+        <Badge className={connected ? "bg-green-200 text-green-800" : "bg-amber-100 text-amber-700"}>
+          {connected ? "Connected" : "Setup pending"}
+        </Badge>
       </div>
       <p className="text-xs text-green-900/60">
-        Auto-posting runs through your <strong>Postiz</strong> account (it holds the platform logins).
-        Connect your accounts in Postiz, then link it here and scheduled clips publish automatically.
+        Auto-posting runs through your <strong>Postiz</strong> account. Connect your channels in Postiz,
+        add your Postiz API key to Supabase secrets, then test the connection here.
       </p>
       <ol className="list-decimal space-y-1 pl-5 text-xs text-green-900/70">
-        <li>In Postiz, add & connect your channels: {FARM_PLATFORMS.map((p) => PLATFORM_LABELS[p]).join(", ")}.</li>
-        <li>In Postiz → Settings → <strong>Public API</strong>, generate an API key.</li>
-        <li>Send me that key + your Postiz URL and I'll switch on auto-posting.</li>
+        <li>In Postiz, connect your channels: {FARM_PLATFORMS.map((p) => PLATFORM_LABELS[p]).join(", ")}.</li>
+        <li>In Postiz → <strong>Settings → Public API</strong>, generate an API key.</li>
+        <li>Add secrets in Supabase: <code>POSTIZ_API_KEY</code> and <code>POSTIZ_API_URL=https://api.postiz.com</code>.</li>
+        <li>Click <strong>Test connection</strong> below.</li>
       </ol>
       <div className="flex flex-wrap gap-2 pt-1">
-        <a href="https://postiz.com" target="_blank" rel="noreferrer">
+        <a href="https://platform.postiz.com/settings" target="_blank" rel="noreferrer">
           <Button variant="outline"><ExternalLink className="size-4" /> Open Postiz</Button>
         </a>
-        <Button variant="ghost" disabled><Link2 className="size-4" /> Link account (coming once keyed)</Button>
+        <Button onClick={test} loading={busy}><Link2 className="size-4" /> Test connection</Button>
       </div>
+      {channels && (
+        <div className="rounded-lg border border-green-900/10 p-2.5 text-xs">
+          {connected ? (
+            <>
+              <p className="mb-1 font-medium text-green-900">Connected channels:</p>
+              <ul className="space-y-0.5">
+                {channels.map((c) => (
+                  <li key={c.id} className="text-green-900/70">• {c.name ?? c.platform} <span className="text-green-900/40">({c.platform})</span></li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="text-amber-700">Connected to Postiz, but no channels found — connect your socials inside Postiz first.</p>
+          )}
+        </div>
+      )}
+      {err && <p className="rounded-lg bg-red-50 p-2 text-[11px] text-red-600">{err}</p>}
       <p className="text-[11px] text-green-900/50">
-        Until this is linked, clips still schedule and you get the tap-to-post nudge as usual.
+        Until this shows Connected, clips still schedule and you get the tap-to-post nudge.
       </p>
     </Card>
   );
