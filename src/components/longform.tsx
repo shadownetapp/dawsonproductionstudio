@@ -64,7 +64,10 @@ function LongUpload({ onDone }: { onDone: () => void }) {
   const process = async () => {
     if (!main) return toast.error("Choose the main long-form video");
     if (!bumper) return toast.error("Choose the mid-roll clip to insert");
-    if (main.size > 500 * 1024 * 1024) return toast.error("Main video is over 500 MB — please trim/compress first");
+    if (main.size > 2 * 1024 * 1024 * 1024) return toast.error("Main video is over 2 GB — please compress it first");
+    if (main.size > 600 * 1024 * 1024) {
+      toast.warning("Large file — the in-browser mid-roll step may be slow or run out of memory. If it fails, compress the video first.");
+    }
     const base = title.trim() || main.name.replace(/\.[^.]+$/, "");
     try {
       setBusy("Reading video…");
@@ -148,7 +151,7 @@ function LongUpload({ onDone }: { onDone: () => void }) {
       </Button>
       <p className="text-[11px] text-green-900/50">
         The main video is split at its midpoint and your mid-roll clip is spliced in. Processing runs in
-        your browser — best for reasonably sized files. Deploys to YouTube &amp; Facebook.
+        your browser (up to ~2 GB, but larger/longer files may hit memory limits). Deploys to YouTube &amp; Facebook.
       </p>
       <input ref={mainRef} type="file" accept="video/*" className="hidden" onChange={(e) => { setMain(e.target.files?.[0] ?? null); e.target.value = ""; }} />
       <input ref={bumpRef} type="file" accept="video/*" className="hidden" onChange={(e) => { setBumper(e.target.files?.[0] ?? null); e.target.value = ""; }} />
