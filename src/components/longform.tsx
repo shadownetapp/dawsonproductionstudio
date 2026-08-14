@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { UploadCloud, Film, Download, CalendarPlus, CalendarX, Trash2, Wand2, Check, ExternalLink, Share2 } from "lucide-react";
-import { Button, Card, Input, Textarea, Label, Modal, Spinner, Badge } from "./ui";
+import { UploadCloud, Film, Download, CalendarPlus, CalendarX, Trash2, Check, ExternalLink, Share2 } from "lucide-react";
+import { Button, Card, Input, Label, Modal, Spinner, Badge } from "./ui";
 import {
   listVideos, createVideo, updateVideo, deleteVideo, getVideoAssets,
-  generateCaptions, updateCaption, scheduleVideo, unscheduleVideo, markPosted, postizPublish,
+  scheduleVideo, unscheduleVideo, markPosted, postizPublish,
 } from "../api";
 import type { FarmVideoWithRelations, FarmPlatform } from "../types";
 import { probeVideoFile, uploadToBucket } from "../client-helpers";
@@ -93,10 +93,6 @@ function LongUpload({ onDone }: { onDone: () => void }) {
         midroll_path: midrollPath,
       });
 
-      setBusy("Writing title + description…");
-      try { await generateCaptions(id, LF_PLATFORMS); }
-      catch (e) { console.error("caption gen failed", e); }
-
       setBusy("Inserting mid-roll (this can take a while)…");
       try {
         const out = await insertMidroll(main, bumper, {
@@ -104,11 +100,11 @@ function LongUpload({ onDone }: { onDone: () => void }) {
         });
         const renderPath = await uploadToBucket("farm-renders", out, { ext: "mp4", contentType: "video/mp4", path: `${id}.mp4` });
         await updateVideo(id, { render_path: renderPath, status: "ready" });
-        toast.success("Done — mid-roll inserted, title + description written.");
+        toast.success("Done — mid-roll inserted.");
       } catch (e) {
         console.error("midroll failed", e);
         await updateVideo(id, { status: "captioned", render_error: e instanceof Error ? e.message : "midroll failed" }).catch(() => {});
-        toast.warning("Uploaded + captioned, but mid-roll insert failed (video may be too large for in-browser processing). You can retry in the editor.");
+        toast.warning("Uploaded, but mid-roll insert failed (video may be too large for in-browser processing).");
       }
 
       setMain(null); setBumper(null); setTitle(""); setDescription("");
@@ -169,27 +165,10 @@ function LongDialog({ video, open, onClose }: { video: FarmVideoWithRelations; o
     staleTime: 45 * 60 * 1000,
   });
 
-  const yt = video.captions.find((c) => c.platform === "youtube");
-  const fb = video.captions.find((c) => c.platform === "facebook");
-  const [ytTitle, setYtTitle] = useState(yt?.title ?? video.title);
-  const [ytDesc, setYtDesc] = useState(yt?.caption ?? "");
-  const [fbDesc, setFbDesc] = useState(fb?.caption ?? "");
-  useEffect(() => {
-    setYtTitle(yt?.title ?? video.title);
-    setYtDesc(yt?.caption ?? "");
-    setFbDesc(fb?.caption ?? "");
-  }, [video.id, yt?.updated_at, fb?.updated_at]);
-
-  const regen = useMutation({
-    mutationFn: () => generateCaptions(video.id, LF_PLATFORMS),
-    onSuccess: () => { toast.success("Title + description refreshed"); invalidate(); },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Failed"),
-  });
-  const save = useMutation({
-    mutationFn: async () => {
-      await updateCaption(video.id, "youtube", { title: ytTitle.trim() || null, caption: ytDesc.trim(), hashtags: yt?.hashtags ?? [] });
-      await updateCaption(video.id, "facebook", { caption: fbDesc.trim(), hashtags: fb?.hashtags ?? [] });
-    },
+  const [title, setTitle] = useState(video.title);
+  useEffect(() => { setTitle(video.title); }, [video.id]);
+  const saveTitle = useMutation({
+    mutationFn: () => updateVideo(video.id, { title: title.trim() || "Untitled" }),
     onSuccess: () => { toast.success("Saved"); invalidate(); },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
   });
@@ -231,23 +210,14 @@ function LongDialog({ video, open, onClose }: { video: FarmVideoWithRelations; o
         </div>
 
         <div className="min-w-0 space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-green-900">Title &amp; description</h3>
-            <Button variant="outline" onClick={() => regen.mutate()} loading={regen.isPending}><Wand2 className="size-4" /> Regenerate</Button>
-          </div>
           <div className="space-y-1">
-            <Label>YouTube title</Label>
-            <Input value={ytTitle} onChange={(e) => setYtTitle(e.target.value)} maxLength={100} />
+            <Label>Title</Label>
+            <div className="flex gap-2">
+              <Input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} />
+              <Button variant="secondary" onClick={() => saveTitle.mutate()} loading={saveTitle.isPending}><Check className="size-4" /> Save</Button>
+            </div>
+            <p className="text-[11px] text-green-900/50">Add descriptions/captions in Postiz or YouTube.</p>
           </div>
-          <div className="space-y-1">
-            <Label>YouTube description</Label>
-            <Textarea value={ytDesc} onChange={(e) => setYtDesc(e.target.value)} rows={4} />
-          </div>
-          <div className="space-y-1">
-            <Label>Facebook description</Label>
-            <Textarea value={fbDesc} onChange={(e) => setFbDesc(e.target.value)} rows={3} />
-          </div>
-          <Button variant="secondary" onClick={() => save.mutate()} loading={save.isPending}><Check className="size-4" /> Save</Button>
 
           <div className="space-y-2 border-t border-green-900/10 pt-3">
             <h3 className="text-sm font-semibold text-green-900">Deploy (YouTube + Facebook)</h3>
